@@ -1,15 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, Copy, ExternalLink, MessageCircle, Plus, Sparkles, X } from "lucide-react";
+import { Check, ChefHat, Copy, ExternalLink, MessageCircle, Plus, Sparkles, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { GAP_NUTRIENTS, VENDORS, WEEKLY_BUDGET, sumNutrition } from "@/lib/constants";
 import { isoWeekStart, todayISO } from "@/lib/date";
+import { aggregateIngredients, estimateIngredientCost, type AggregatedIngredient } from "@/lib/ingredientPricing";
 import { NutrientBar, SectionLabel, VendorIcon, LoadingScreen } from "@/components/ui";
 import type { Database } from "@/lib/database.types";
 
 type GroceryItem = Database["public"]["Tables"]["grocery_items"]["Row"];
 type Targets = Database["public"]["Tables"]["nutrition_targets"]["Row"];
+type Vendor = "blinkit" | "zepto" | "instamart";
 
 const GROUP_LABELS: Record<string, string> = {
   kirana: "Kirana Store",
@@ -26,9 +28,10 @@ export default function GroceryScreen() {
   const [items, setItems] = useState<GroceryItem[]>([]);
   const [checked, setChecked] = useState<Record<string, boolean>>({});
   const [addedExtras, setAddedExtras] = useState<string[]>([]);
-  const [vendor, setVendor] = useState<"blinkit" | "zepto" | "instamart">("blinkit");
+  const [vendor, setVendor] = useState<Vendor>("blinkit");
   const [targets, setTargets] = useState<Targets | null>(null);
   const [todayNutrition, setTodayNutrition] = useState(sumNutrition([]));
+  const [dishIngredients, setDishIngredients] = useState<AggregatedIngredient[]>([]);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const weekStart = isoWeekStart();
 
@@ -44,21 +47,24 @@ export default function GroceryScreen() {
         supabase.from("grocery_items").select("*").order("name"),
         supabase.from("grocery_list_state").select("*").eq("user_id", user.id).eq("week_start", weekStart).maybeSingle(),
         supabase.from("nutrition_targets").select("*").eq("user_id", user.id).single(),
-        supabase.from("meal_plans").select("recipes(nutrition)").eq("user_id", user.id).eq("plan_date", todayISO()),
+        supabase.from("meal_plans").select("recipes(name, ingredients, nutrition)").eq("user_id", user.id).eq("plan_date", todayISO()),
       ]);
+
+      const recipes = ((planRows ?? []) as any[]).map((p) => p.recipes).filter(Boolean);
 
       setItems(catalog ?? []);
       setChecked((state?.checked_items as Record<string, boolean>) ?? {});
       setAddedExtras(state?.added_extras ?? []);
-      setVendor((state?.vendor as any) ?? "blinkit");
+      setVendor((state?.vendor as Vendor) ?? "blinkit");
       setTargets(targetRow ?? null);
-      setTodayNutrition(sumNutrition(((planRows ?? []) as any[]).map((p) => ({ nutrition: p.recipes?.nutrition }))));
+      setTodayNutrition(sumNutrition(recipes.map((r) => ({ nutrition: r.nutrition }))));
+      setDishIngredients(aggregateIngredients(recipes));
       setLoading(false);
     })();
   }, [supabase, weekStart]);
 
   const persist = async (
-    patch: Partial<{ checked_items: Record<string, boolean>; added_extras: string[]; vendor: "blinkit" | "zepto" | "instamart" }>
+    patch: Partial<{ checked_items: Record<string, boolean>; added_extras: string[]; vendor: Vendor }>
   ) => {
     if (!userId) return;
     await supabase.from("grocery_list_state").upsert({
@@ -89,7 +95,7 @@ export default function GroceryScreen() {
     persist({ added_extras: next });
   };
 
-  const changeVendor = (v: "blinkit" | "zepto" | "instamart") => {
+  const changeVendor = (v: Vendor) => {
     setVendor(v);
     persist({ vendor: v });
   };
@@ -97,10 +103,27 @@ export default function GroceryScreen() {
   const baseItems = items.filter((i) => i.vendor_category !== "addon");
   const addonCatalog = items.filter((i) => i.vendor_category === "addon");
   const extrasItems = addedExtras.map((id) => addonCatalog.find((a) => a.id === id)).filter(Boolean) as GroceryItem[];
-  const allItems = [...baseItems, ...extrasItems];
-  const total = allItems.reduce((a, i) => a + Number(i.cost_estimate), 0);
-  const gotTotal = allItems.filter((i) => checked[i.id]).reduce((a, i) => a + Number(i.cost_estimate), 0);
-  const missing = allItems.filter((i) => !checked[i.id]);
+
+  // Dish-ingredient rows are priced live from the selected vendor, not a
+  // stored cost_estimate, so they re-price the instant `vendor` changes.
+  const dishRows = useMemo(
+    () => dishIngredients.map((ing) => ({ ...ing, cost: estimateIngredientCost(ing.name, vendor) })),
+    [dishIngredients, vendor]
+  );
+
+  const dishTotal = dishRows.reduce((a, i) => a + i.cost, 0);
+  const dishGot = dishRows.filter((i) => checked[i.key]).reduce((a, i) => a + i.cost, 0);
+  const baseTotal = baseItems.reduce((a, i) => a + Number(i.cost_estimate), 0);
+  const baseGot = baseItems.filter((i) => checked[i.id]).reduce((a, i) => a + Number(i.cost_estimate), 0);
+  const extrasTotal = extrasItems.reduce((a, i) => a + Number(i.cost_estimate), 0);
+  const extrasGot = extrasItems.filter((i) => checked[i.id]).reduce((a, i) => a + Number(i.cost_estimate), 0);
+
+  const total = dishTotal + baseTotal + extrasTotal;
+  const gotTotal = dishGot + baseGot + extrasGot;
+  const missingDish = dishRows.filter((i) => !checked[i.key]);
+  const missingBase = baseItems.filter((i) => !checked[i.id]);
+  const missingExtras = extrasItems.filter((i) => !checked[i.id]);
+  const missingCount = missingDish.length + missingBase.length + missingExtras.length;
   const activeVendor = VENDORS.find((v) => v.id === vendor)!;
 
   const extrasNutrition = sumNutrition(extrasItems);
@@ -133,10 +156,13 @@ export default function GroceryScreen() {
       .slice(0, 3);
   }, [targets, combined, addonCatalog, addedExtras]);
 
+  const missingLabel = (i: { name: string; qty: string | null; unit?: string; cost?: number; cost_estimate?: number }) =>
+    `${i.name} (${i.qty}${"unit" in i && i.unit ? " " + i.unit : ""})`;
+
   const handleOrder = async () => {
-    const list = missing.map((i) => `${i.name} (${i.qty})`).join(", ");
+    const list = [...missingDish, ...missingBase, ...missingExtras].map((i: any) => missingLabel(i)).join(", ");
     try {
-      if (navigator.clipboard && missing.length) {
+      if (navigator.clipboard && list) {
         await navigator.clipboard.writeText(list);
         setCopyState("copied");
       }
@@ -147,10 +173,17 @@ export default function GroceryScreen() {
   };
 
   const whatsappHref = useMemo(() => {
-    const list = missing.map((i) => `• ${i.name} (${i.qty}) — ₹${i.cost_estimate}`).join("\n");
-    const text = `Rasoi grocery list:\n${list}\n\nTotal: ₹${total - gotTotal} left to buy`;
+    const dishLines = missingDish.map((i) => `• ${i.name} (${i.qty} ${i.unit}) — ₹${i.cost}`);
+    const baseLines = missingBase.map((i) => `• ${i.name} (${i.qty}) — ₹${i.cost_estimate}`);
+    const extraLines = missingExtras.map((i) => `• ${i.name} (${i.qty}) — ₹${i.cost_estimate}`);
+    const sections = [
+      dishLines.length ? `For today's thali:\n${dishLines.join("\n")}` : "",
+      baseLines.length ? `Also stock up on:\n${baseLines.join("\n")}` : "",
+      extraLines.length ? `Nutrition top-ups:\n${extraLines.join("\n")}` : "",
+    ].filter(Boolean);
+    const text = `Rasoi grocery list:\n\n${sections.join("\n\n")}\n\nTotal: ₹${total - gotTotal} left to buy`;
     return `https://wa.me/?text=${encodeURIComponent(text)}`;
-  }, [missing, total, gotTotal]);
+  }, [missingDish, missingBase, missingExtras, total, gotTotal]);
 
   if (loading || !targets) return <LoadingScreen label="Stocking up..." />;
 
@@ -198,7 +231,52 @@ export default function GroceryScreen() {
             </div>
           ))}
         </div>
+        <p className="mt-2 text-[11px] text-stone-400">Updates live as you add "Fill the gap" items below.</p>
       </div>
+
+      <div>
+        <SectionLabel>Price ingredients as per</SectionLabel>
+        <div className="flex gap-2">
+          {VENDORS.map((v) => (
+            <button
+              key={v.id}
+              onClick={() => changeVendor(v.id)}
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-full py-2 text-xs font-medium ${vendor === v.id ? `${v.tone} text-white` : "border border-stone-200 bg-white text-stone-600"}`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${vendor === v.id ? "bg-white" : v.tone}`} />
+              {v.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {dishRows.length > 0 && (
+        <div>
+          <div className="mb-2 flex items-center gap-2">
+            <ChefHat className="h-4 w-4" />
+            <SectionLabel>For today's thali · priced on {activeVendor.name}</SectionLabel>
+          </div>
+          <div className="rounded-2xl border border-stone-200 bg-white divide-y divide-stone-100">
+            {dishRows.map((item) => (
+              <label key={item.key} className="flex items-center gap-3 px-4 py-3">
+                <button
+                  onClick={() => toggle(item.key)}
+                  className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${checked[item.key] ? "border-emerald-700 bg-emerald-700 text-white" : "border-stone-300"}`}
+                >
+                  {checked[item.key] && <Check size={13} />}
+                </button>
+                <div className="flex-1">
+                  <p className={`text-sm ${checked[item.key] ? "text-stone-400 line-through" : "text-stone-800"}`}>{item.name}</p>
+                  <p className="text-xs text-stone-400">
+                    {item.qty} {item.unit} · for {item.recipes.join(", ")}
+                  </p>
+                </div>
+                <span className="text-xs text-stone-500 font-mono">₹{item.cost}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
 
       {recommended.length > 0 && (
         <div>
@@ -229,19 +307,8 @@ export default function GroceryScreen() {
       )}
 
       <div>
-        <SectionLabel>Order missing items via</SectionLabel>
-        <div className="flex gap-2">
-          {VENDORS.map((v) => (
-            <button
-              key={v.id}
-              onClick={() => changeVendor(v.id)}
-              className={`flex flex-1 items-center justify-center gap-1.5 rounded-full py-2 text-xs font-medium ${vendor === v.id ? `${v.tone} text-white` : "border border-stone-200 bg-white text-stone-600"}`}
-            >
-              <span className={`h-1.5 w-1.5 rounded-full ${vendor === v.id ? "bg-white" : v.tone}`} />
-              {v.name}
-            </button>
-          ))}
-        </div>
+        <SectionLabel>General staples — beyond today's dishes</SectionLabel>
+        <p className="-mt-1 mb-2 text-xs text-stone-400">Weekly kirana/sabziwala/dairy run, independent of what's cooking today.</p>
       </div>
 
       {GROUP_ORDER.map((group) => {
@@ -325,7 +392,7 @@ export default function GroceryScreen() {
         </button>
       </div>
       <p className="text-center text-[11px] text-stone-400 -mt-2">
-        {missing.length} item{missing.length !== 1 ? "s" : ""} left to buy · copies to clipboard, since {activeVendor.name} doesn't support direct cart hand-off yet
+        {missingCount} item{missingCount !== 1 ? "s" : ""} left to buy · copies to clipboard, since {activeVendor.name} doesn't support direct cart hand-off yet
       </p>
     </div>
   );
