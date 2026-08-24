@@ -11,14 +11,30 @@ import type { Database } from "@/lib/database.types";
 type Recipe = Database["public"]["Tables"]["recipes"]["Row"];
 type Member = Database["public"]["Tables"]["household_members"]["Row"];
 
+function recipeMatches(recipe: Recipe, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return false;
+  const haystack = [
+    recipe.name,
+    recipe.region ?? "",
+    recipe.diet ?? "",
+    ...(recipe.tags ?? []),
+    ...(recipe.ingredients ?? []).map((i) => i.name),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(q);
+}
+
 export default function DiscoverScreen() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
-  const [recipes, setRecipes] = useState<Recipe[]>([]);
+  const [allRecipes, setAllRecipes] = useState<Recipe[]>([]);
+  const [swipedMap, setSwipedMap] = useState<Record<string, "skip" | "save">>({});
   const [members, setMembers] = useState<Member[]>([]);
   const [idx, setIdx] = useState(0);
-  const [savedCount, setSavedCount] = useState(0);
+  const [query, setQuery] = useState("");
   const [cheatMode, setCheatMode] = useState(false);
   const [cheatPriority, setCheatPriority] = useState<"protein" | "light" | "balance" | "enjoy">("balance");
   const [cheatSaved, setCheatSaved] = useState<string[]>([]);
@@ -31,29 +47,41 @@ export default function DiscoverScreen() {
       if (!user) return;
       setUserId(user.id);
 
-      const [{ data: allRecipes }, { data: swipes }, { data: memberRows }] = await Promise.all([
+      const [{ data: recipeRows }, { data: swipes }, { data: memberRows }] = await Promise.all([
         supabase.from("recipes").select("*").eq("source", "discover").order("created_at"),
-        supabase.from("discover_swipes").select("recipe_id").eq("user_id", user.id),
+        supabase.from("discover_swipes").select("recipe_id, action").eq("user_id", user.id),
         supabase.from("household_members").select("*").eq("user_id", user.id),
       ]);
 
-      const swiped = new Set((swipes ?? []).map((s) => s.recipe_id));
-      const remaining = (allRecipes ?? []).filter((r) => !swiped.has(r.id));
-      setRecipes(remaining);
-      setSavedCount((swipes ?? []).filter((s: any) => s.action === "save").length);
+      const map: Record<string, "skip" | "save"> = {};
+      (swipes ?? []).forEach((s: any) => {
+        map[s.recipe_id] = s.action;
+      });
+
+      setAllRecipes(recipeRows ?? []);
+      setSwipedMap(map);
       setMembers(memberRows ?? []);
       setLoading(false);
     })();
   }, [supabase]);
 
-  const dish = recipes[idx];
+  const deck = useMemo(() => allRecipes.filter((r) => !swipedMap[r.id]), [allRecipes, swipedMap]);
+  const savedCount = useMemo(() => Object.values(swipedMap).filter((a) => a === "save").length, [swipedMap]);
+  const searchResults = useMemo(() => (query.trim() ? allRecipes.filter((r) => recipeMatches(r, query)) : []), [allRecipes, query]);
+
+  const dish = deck[idx];
   const fit = useMemo(() => (dish ? computeHouseholdFit(dish, members) : null), [dish, members]);
 
-  const swipe = async (action: "skip" | "save") => {
-    if (!userId || !dish) return;
+  const recordSwipe = async (recipeId: string, action: "skip" | "save") => {
+    if (!userId) return;
+    setSwipedMap((m) => ({ ...m, [recipeId]: action }));
+    await supabase.from("discover_swipes").insert({ user_id: userId, recipe_id: recipeId, action });
+  };
+
+  const swipe = (action: "skip" | "save") => {
+    if (!dish) return;
+    recordSwipe(dish.id, action);
     setIdx((i) => i + 1);
-    if (action === "save") setSavedCount((c) => c + 1);
-    await supabase.from("discover_swipes").insert({ user_id: userId, recipe_id: dish.id, action });
   };
 
   const saveCheatItem = async (name: string) => {
@@ -64,7 +92,7 @@ export default function DiscoverScreen() {
 
   if (loading) return <LoadingScreen label="Finding today's picks..." />;
 
-  const done = idx >= recipes.length;
+  const done = idx >= deck.length;
 
   return (
     <div className="flex flex-col gap-4 px-4 pb-6 pt-5">
@@ -82,14 +110,72 @@ export default function DiscoverScreen() {
         <>
           <div className="flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-2">
             <Search size={16} className="text-stone-400" />
-            <input placeholder="Search by dish, region, or ingredient" className="flex-1 text-sm outline-none placeholder:text-stone-400" />
-            <Mic size={16} className="text-red-900" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by dish, region, or ingredient"
+              className="flex-1 text-sm outline-none placeholder:text-stone-400"
+            />
+            {query ? (
+              <button onClick={() => setQuery("")} className="text-stone-400">
+                <X size={16} />
+              </button>
+            ) : (
+              <Mic size={16} className="text-red-900" />
+            )}
           </div>
 
-          {!done ? (
+          {query.trim() ? (
+            searchResults.length > 0 ? (
+              <div className="flex flex-col gap-3">
+                <p className="text-xs text-stone-400 font-mono">
+                  {searchResults.length} match{searchResults.length !== 1 ? "es" : ""} for "{query.trim()}"
+                </p>
+                {searchResults.map((r) => (
+                  <div key={r.id} className="rounded-2xl border border-stone-200 bg-white p-4">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                        {r.region} · {r.diet}
+                      </p>
+                      <SpiceFlames level={r.spice_level ?? 1} />
+                    </div>
+                    <h3 className="mt-1 text-lg text-stone-900 font-serif font-semibold">{r.name}</h3>
+                    <div className="mt-1 flex items-center gap-4 text-sm text-stone-500">
+                      <span className="flex items-center gap-1">
+                        <Clock size={13} />
+                        {r.time_minutes} min
+                      </span>
+                      <span className="flex items-center gap-1 font-mono">
+                        <IndianRupee size={12} />
+                        {r.cost_estimate}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {r.tags.map((t) => (
+                        <Tag key={t}>{t}</Tag>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => recordSwipe(r.id, "save")}
+                      disabled={swipedMap[r.id] === "save"}
+                      className="mt-3 flex items-center gap-1 text-sm font-medium text-red-900 disabled:opacity-50"
+                    >
+                      <Heart size={15} /> {swipedMap[r.id] === "save" ? "Saved" : "Save"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2 rounded-3xl border border-dashed border-stone-300 py-14 text-center">
+                <Search className="text-stone-400" />
+                <p className="text-sm font-medium text-stone-700">No dishes match "{query.trim()}".</p>
+                <p className="text-xs text-stone-400">Try a region, an ingredient, or part of the dish name.</p>
+              </div>
+            )
+          ) : !done ? (
             <>
               <p className="text-xs text-stone-400 font-mono">
-                {idx + 1} of {recipes.length}
+                {idx + 1} of {deck.length}
               </p>
               <div className="rounded-3xl border border-stone-200 bg-white overflow-hidden">
                 <div className="flex h-36 items-center justify-center bg-gradient-to-br from-amber-400 to-red-800">
