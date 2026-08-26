@@ -1,15 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, ChefHat, Clock, Heart, IndianRupee, Info, Mic, Pizza, Search, Sparkles, Users, X } from "lucide-react";
+import { AlertCircle, Check, ChefHat, Clock, IndianRupee, Info, Mic, Pizza, Search, Sparkles, Users, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { CHEAT_ITEMS, CHEAT_PRIORITIES } from "@/lib/constants";
+import { CHEAT_ITEMS, CHEAT_PRIORITIES, dietAllowed } from "@/lib/constants";
 import { computeHouseholdFit } from "@/lib/householdFit";
+import { todayISO } from "@/lib/date";
 import { Tag, SpiceFlames, LoadingScreen } from "@/components/ui";
-import type { Database } from "@/lib/database.types";
+import type { Database, DietPreference } from "@/lib/database.types";
 
 type Recipe = Database["public"]["Tables"]["recipes"]["Row"];
 type Member = Database["public"]["Tables"]["household_members"]["Row"];
+type MealSlot = "breakfast" | "lunch" | "dinner";
+const SLOTS: { id: MealSlot; label: string }[] = [
+  { id: "breakfast", label: "Breakfast" },
+  { id: "lunch", label: "Lunch" },
+  { id: "dinner", label: "Dinner" },
+];
 
 function recipeMatches(recipe: Recipe, query: string): boolean {
   const q = query.trim().toLowerCase();
@@ -26,12 +33,50 @@ function recipeMatches(recipe: Recipe, query: string): boolean {
   return haystack.includes(q);
 }
 
+function regionScore(recipe: Recipe, regionPrefs: string[]): number {
+  if (regionPrefs.length === 0) return 0;
+  return recipe.tags.some((t) => regionPrefs.includes(t)) ? 1 : 0;
+}
+
+function SlotButtons({
+  recipeId,
+  filledSlots,
+  onAdd,
+}: {
+  recipeId: string;
+  filledSlots: Partial<Record<MealSlot, string>>;
+  onAdd: (slot: MealSlot) => void;
+}) {
+  return (
+    <div className="flex gap-1.5">
+      {SLOTS.map((s) => {
+        const isThisDish = filledSlots[s.id] === recipeId;
+        return (
+          <button
+            key={s.id}
+            onClick={() => onAdd(s.id)}
+            className={`flex flex-1 items-center justify-center gap-1 rounded-full py-1.5 text-[11px] font-medium ${
+              isThisDish ? "bg-emerald-700 text-white" : "bg-stone-900 text-amber-50"
+            }`}
+          >
+            {isThisDish && <Check size={11} />}
+            {s.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function DiscoverScreen() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
+  const [dietPref, setDietPref] = useState<DietPreference | null>(null);
+  const [regionPrefs, setRegionPrefs] = useState<string[]>([]);
   const [allRecipes, setAllRecipes] = useState<Recipe[]>([]);
   const [swipedMap, setSwipedMap] = useState<Record<string, "skip" | "save">>({});
+  const [filledSlots, setFilledSlots] = useState<Partial<Record<MealSlot, string>>>({});
   const [members, setMembers] = useState<Member[]>([]);
   const [idx, setIdx] = useState(0);
   const [query, setQuery] = useState("");
@@ -47,41 +92,61 @@ export default function DiscoverScreen() {
       if (!user) return;
       setUserId(user.id);
 
-      const [{ data: recipeRows }, { data: swipes }, { data: memberRows }] = await Promise.all([
+      const [{ data: profile }, { data: recipeRows }, { data: swipes }, { data: memberRows }, { data: planRows }] = await Promise.all([
+        supabase.from("profiles").select("diet_preference, region_preferences").eq("id", user.id).single(),
         supabase.from("recipes").select("*").eq("source", "discover").order("created_at"),
         supabase.from("discover_swipes").select("recipe_id, action").eq("user_id", user.id),
         supabase.from("household_members").select("*").eq("user_id", user.id),
+        supabase.from("meal_plans").select("meal_slot, recipe_id").eq("user_id", user.id).eq("plan_date", todayISO()),
       ]);
 
       const map: Record<string, "skip" | "save"> = {};
       (swipes ?? []).forEach((s: any) => {
         map[s.recipe_id] = s.action;
       });
+      const slots: Partial<Record<MealSlot, string>> = {};
+      (planRows ?? []).forEach((p: any) => {
+        slots[p.meal_slot as MealSlot] = p.recipe_id;
+      });
 
+      setDietPref((profile?.diet_preference as DietPreference | null) ?? null);
+      setRegionPrefs(profile?.region_preferences ?? []);
       setAllRecipes(recipeRows ?? []);
       setSwipedMap(map);
+      setFilledSlots(slots);
       setMembers(memberRows ?? []);
       setLoading(false);
     })();
   }, [supabase]);
 
-  const deck = useMemo(() => allRecipes.filter((r) => !swipedMap[r.id]), [allRecipes, swipedMap]);
-  const savedCount = useMemo(() => Object.values(swipedMap).filter((a) => a === "save").length, [swipedMap]);
-  const searchResults = useMemo(() => (query.trim() ? allRecipes.filter((r) => recipeMatches(r, query)) : []), [allRecipes, query]);
+  const eligible = useMemo(
+    () => allRecipes.filter((r) => dietAllowed(r.diet, dietPref)).sort((a, b) => regionScore(b, regionPrefs) - regionScore(a, regionPrefs)),
+    [allRecipes, dietPref, regionPrefs]
+  );
+  const deck = useMemo(() => eligible.filter((r) => !swipedMap[r.id]), [eligible, swipedMap]);
+  const searchResults = useMemo(() => (query.trim() ? eligible.filter((r) => recipeMatches(r, query)) : []), [eligible, query]);
 
   const dish = deck[idx];
   const fit = useMemo(() => (dish ? computeHouseholdFit(dish, members) : null), [dish, members]);
 
-  const recordSwipe = async (recipeId: string, action: "skip" | "save") => {
+  const addToSlot = async (recipeId: string, slot: MealSlot) => {
     if (!userId) return;
-    setSwipedMap((m) => ({ ...m, [recipeId]: action }));
-    await supabase.from("discover_swipes").insert({ user_id: userId, recipe_id: recipeId, action });
+    setFilledSlots((m) => ({ ...m, [slot]: recipeId }));
+    setSwipedMap((m) => ({ ...m, [recipeId]: "save" }));
+    await Promise.all([
+      supabase
+        .from("meal_plans")
+        .upsert({ user_id: userId, plan_date: todayISO(), meal_slot: slot, recipe_id: recipeId }, { onConflict: "user_id,plan_date,meal_slot" }),
+      supabase.from("discover_swipes").upsert({ user_id: userId, recipe_id: recipeId, action: "save" }, { onConflict: "user_id,recipe_id" }),
+    ]);
+    if (dish?.id === recipeId) setIdx((i) => i + 1);
   };
 
-  const swipe = (action: "skip" | "save") => {
-    if (!dish) return;
-    recordSwipe(dish.id, action);
+  const skip = async () => {
+    if (!userId || !dish) return;
+    setSwipedMap((m) => ({ ...m, [dish.id]: "skip" }));
     setIdx((i) => i + 1);
+    await supabase.from("discover_swipes").upsert({ user_id: userId, recipe_id: dish.id, action: "skip" }, { onConflict: "user_id,recipe_id" });
   };
 
   const saveCheatItem = async (name: string) => {
@@ -155,13 +220,9 @@ export default function DiscoverScreen() {
                         <Tag key={t}>{t}</Tag>
                       ))}
                     </div>
-                    <button
-                      onClick={() => recordSwipe(r.id, "save")}
-                      disabled={swipedMap[r.id] === "save"}
-                      className="mt-3 flex items-center gap-1 text-sm font-medium text-red-900 disabled:opacity-50"
-                    >
-                      <Heart size={15} /> {swipedMap[r.id] === "save" ? "Saved" : "Save"}
-                    </button>
+                    <div className="mt-3">
+                      <SlotButtons recipeId={r.id} filledSlots={filledSlots} onAdd={(slot) => addToSlot(r.id, slot)} />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -221,13 +282,12 @@ export default function DiscoverScreen() {
                       </div>
                     </div>
                   )}
-                  <div className="mt-4 flex gap-3">
-                    <button onClick={() => swipe("skip")} className="flex flex-1 items-center justify-center gap-2 rounded-full border border-stone-300 py-2.5 text-stone-600">
+                  <div className="mt-4 flex flex-col gap-2">
+                    <button onClick={skip} className="flex items-center justify-center gap-2 rounded-full border border-stone-300 py-2.5 text-stone-600">
                       <X size={18} /> Skip
                     </button>
-                    <button onClick={() => swipe("save")} className="flex flex-1 items-center justify-center gap-2 rounded-full bg-red-900 py-2.5 text-amber-50">
-                      <Heart size={18} /> Save
-                    </button>
+                    <p className="text-center text-[11px] text-stone-400">Add to today's Rasoi</p>
+                    <SlotButtons recipeId={dish.id} filledSlots={filledSlots} onAdd={(slot) => addToSlot(dish.id, slot)} />
                   </div>
                 </div>
               </div>
@@ -236,7 +296,7 @@ export default function DiscoverScreen() {
             <div className="flex flex-col items-center gap-2 rounded-3xl border border-dashed border-stone-300 py-14 text-center">
               <Sparkles className="text-amber-600" />
               <p className="text-sm font-medium text-stone-700">You've been through today's picks.</p>
-              <p className="text-xs text-stone-400">Saved {savedCount} · check back tomorrow for more</p>
+              <p className="text-xs text-stone-400">Search above to find something specific, or check back tomorrow.</p>
             </div>
           )}
         </>
@@ -272,7 +332,7 @@ export default function DiscoverScreen() {
                   disabled={cheatSaved.includes(item.name)}
                   className="mt-3 flex items-center gap-1 text-sm font-medium text-red-900 disabled:opacity-50"
                 >
-                  <Heart size={15} /> {cheatSaved.includes(item.name) ? "Saved" : "Save for this weekend"}
+                  {cheatSaved.includes(item.name) ? "Saved" : "Save for this weekend"}
                 </button>
               </div>
             ))}
