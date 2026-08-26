@@ -26,11 +26,17 @@ export type RecipeTrack = {
 
 export type Ingredient = { name: string; qty: string; unit: string };
 
+export type DietPreference = "veg" | "egg" | "non-veg";
+
 type ProfileRow = {
   id: string;
   display_name: string | null;
   language: "en" | "hi";
   active_member_id: string | null;
+  diet_preference: DietPreference | null;
+  region_preferences: string[];
+  region_preference_other: string | null;
+  onboarding_completed: boolean;
   created_at: string;
 };
 
@@ -77,6 +83,7 @@ type MealPlanRow = {
   meal_slot: "breakfast" | "lunch" | "dinner";
   recipe_id: string;
   planned_time: string | null;
+  portion: number;
   created_at: string;
 };
 
@@ -96,7 +103,7 @@ type GroceryItemRow = {
 type GroceryListStateRow = {
   user_id: string;
   week_start: string;
-  checked_items: Record<string, boolean>;
+  to_buy_items: Record<string, boolean>;
   added_extras: string[];
   vendor: "blinkit" | "zepto" | "instamart";
   updated_at: string;

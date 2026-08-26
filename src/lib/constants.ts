@@ -1,4 +1,4 @@
-import type { Nutrition } from "@/lib/database.types";
+import type { DietPreference, Nutrition } from "@/lib/database.types";
 
 export const GOAL_PRESETS: Record<string, { label: string; calories: number; protein: number; carbs: number; fat: number }> = {
   maintain: { label: "Maintain", calories: 2000, protein: 60, carbs: 250, fat: 65 },
@@ -9,7 +9,13 @@ export const GOAL_PRESETS: Record<string, { label: string; calories: number; pro
 export const MICRO_RDA = { fiber: 30, iron: 18, calcium: 1000 };
 export const GAP_NUTRIENTS = ["protein", "fiber", "iron", "calcium"] as const;
 
-export const WEEKLY_BUDGET = 1500;
+export const DIET_OPTIONS: { id: DietPreference; label: string; hint: string }[] = [
+  { id: "veg", label: "Veg", hint: "No eggs, no meat, no fish" },
+  { id: "egg", label: "Egg", hint: "Veg + eggs, no meat or fish" },
+  { id: "non-veg", label: "Non-veg", hint: "Everything, including meat and fish" },
+];
+
+export const REGION_OPTIONS = ["North Indian", "South Indian", "North Eastern", "Gujarati", "Rajasthani"] as const;
 
 export const VENDORS = [
   { id: "blinkit", name: "Blinkit", tone: "bg-yellow-500", url: "https://blinkit.com/" },
@@ -38,15 +44,25 @@ export const STRINGS = {
   hi: { greeting: "नमस्ते", tagline: "आज क्या बनेगा?", nav: { today: "आज", discover: "खोजें", grocery: "राशन", cook: "पकाएँ", profile: "प्रोफ़ाइल" } },
 } as const;
 
-export function sumNutrition(list: { nutrition?: Partial<Nutrition> | null }[]): Nutrition {
+export function sumNutrition(list: { nutrition?: Partial<Nutrition> | null; portion?: number }[]): Nutrition {
   return list.reduce(
     (acc, item) => {
       const n = item.nutrition || {};
+      const p = item.portion ?? 1;
       (Object.keys(n) as (keyof Nutrition)[]).forEach((k) => {
-        acc[k] = (acc[k] || 0) + (n[k] || 0);
+        acc[k] = (acc[k] || 0) + (n[k] || 0) * p;
       });
       return acc;
     },
     { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, iron: 0, calcium: 0 } as Nutrition
   );
+}
+
+// 'non-veg' eats everything; 'egg' adds eggs on top of veg; 'veg' excludes
+// both. Vrat/fasting dishes are always veg-compatible regardless of pref.
+export function dietAllowed(recipeDiet: string | null, pref: DietPreference | null): boolean {
+  if (!pref || pref === "non-veg") return true;
+  if (recipeDiet === "Vrat / Fasting") return true;
+  if (pref === "egg") return recipeDiet !== "Non-veg";
+  return recipeDiet === "Veg";
 }

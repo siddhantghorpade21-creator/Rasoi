@@ -1,5 +1,10 @@
 import type { Ingredient } from "@/lib/database.types";
 
+// Per-vendor pricing is built but deliberately not wired into the Grocery
+// screen right now (see the "beginner version" simplification pass) — kept
+// here so it's a quick re-wire when that feature comes back, rather than
+// dead weight to delete and rebuild later.
+//
 // There's no public Blinkit/Zepto/Instamart pricing API (see README non-goals),
 // so ingredient costs are simulated: a curated kirana-baseline price per
 // common ingredient, run through a per-vendor markup. Unknown ingredients
@@ -70,25 +75,35 @@ export function estimateIngredientCost(name: string, vendor: "blinkit" | "zepto"
 
 export type AggregatedIngredient = { key: string; name: string; qty: string; unit: string; recipes: string[] };
 
-// Merges the same ingredient (by name+unit) across today's recipes, summing
+function scaleQty(qty: string, portion: number): string {
+  const n = Number(qty);
+  if (Number.isNaN(n)) return qty;
+  const scaled = n * portion;
+  return Number.isInteger(scaled) ? String(scaled) : String(Math.round(scaled * 100) / 100);
+}
+
+// Merges the same ingredient (by name+unit) across today's recipes, scaling
+// each recipe's quantities by its portion multiplier first and then summing
 // numeric quantities where possible so "Ghee, 1 tsp" (khichdi) + "Ghee, 2
 // tbsp" (paratha) doesn't show as two separate rows. `key` is stable across
 // renders/days for the same ingredient+unit, so it doubles as the id used to
-// persist checked state.
-export function aggregateIngredients(recipes: { name: string; ingredients: Ingredient[] }[]): AggregatedIngredient[] {
+// persist to-buy state.
+export function aggregateIngredients(recipes: { name: string; ingredients: Ingredient[]; portion?: number }[]): AggregatedIngredient[] {
   const byKey = new Map<string, AggregatedIngredient>();
 
   for (const recipe of recipes) {
+    const portion = recipe.portion ?? 1;
     for (const ing of recipe.ingredients || []) {
       const key = `ing:${normalize(ing.name)}|${ing.unit}`;
+      const scaledQty = scaleQty(ing.qty, portion);
       const existing = byKey.get(key);
       if (existing) {
         const a = Number(existing.qty);
-        const b = Number(ing.qty);
-        existing.qty = !Number.isNaN(a) && !Number.isNaN(b) ? String(a + b) : `${existing.qty} + ${ing.qty}`;
+        const b = Number(scaledQty);
+        existing.qty = !Number.isNaN(a) && !Number.isNaN(b) ? String(a + b) : `${existing.qty} + ${scaledQty}`;
         if (!existing.recipes.includes(recipe.name)) existing.recipes.push(recipe.name);
       } else {
-        byKey.set(key, { key, name: ing.name, qty: ing.qty, unit: ing.unit, recipes: [recipe.name] });
+        byKey.set(key, { key, name: ing.name, qty: scaledQty, unit: ing.unit, recipes: [recipe.name] });
       }
     }
   }

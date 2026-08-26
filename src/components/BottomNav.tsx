@@ -9,8 +9,8 @@ export function BottomNav({ lang }: { lang: "en" | "hi" }) {
   const pathname = usePathname();
   const s = STRINGS[lang];
   const navItems = [
-    { id: "today", href: "/today", label: s.nav.today, icon: Home },
     { id: "discover", href: "/discover", label: s.nav.discover, icon: Search },
+    { id: "today", href: "/today", label: s.nav.today, icon: Home },
     { id: "grocery", href: "/grocery", label: s.nav.grocery, icon: ShoppingCart },
     { id: "cook", href: "/cook", label: s.nav.cook, icon: ChefHat },
     { id: "profile", href: "/profile", label: s.nav.profile, icon: User },

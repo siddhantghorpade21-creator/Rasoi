@@ -9,7 +9,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: profile } = await supabase.from("profiles").select("language").eq("id", user.id).single();
+  const { data: profile } = await supabase.from("profiles").select("language, onboarding_completed").eq("id", user.id).single();
+  if (!profile?.onboarding_completed) redirect("/onboarding");
   const lang = (profile?.language ?? "en") as "en" | "hi";
 
   return (
