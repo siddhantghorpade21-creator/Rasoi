@@ -84,7 +84,9 @@ function CookScreenInner() {
 
       if (planId) {
         const { data } = await supabase.from("meal_plans").select("*, recipes(*)").eq("id", planId).eq("user_id", user.id).single();
-        setDish((data as unknown as PlanRow) ?? null);
+        const row = (data as unknown as PlanRow) ?? null;
+        setDish(row);
+        if (row) setPortion(row.portion);
       } else {
         const { data } = await supabase.from("meal_plans").select("*, recipes(*)").eq("user_id", user.id).eq("plan_date", todayISO());
         setTodaysPlans((data as unknown as PlanRow[]) ?? []);
@@ -94,6 +96,13 @@ function CookScreenInner() {
   }, [supabase, planId]);
 
   const toggleStep = (key: string) => setCheckedSteps((c) => ({ ...c, [key]: !c[key] }));
+
+  const changePortion = async (delta: number) => {
+    if (!dish) return;
+    const next = Math.max(0.5, Math.round((portion + delta) * 2) / 2);
+    setPortion(next);
+    await supabase.from("meal_plans").update({ portion: next }).eq("id", dish.id);
+  };
 
   if (loading) return <LoadingScreen label="Preheating..." />;
 
@@ -147,11 +156,11 @@ function CookScreenInner() {
         <div className="flex items-center justify-between">
           <SectionLabel>Your portion</SectionLabel>
           <div className="flex items-center gap-3">
-            <button onClick={() => setPortion(Math.max(0.5, portion - 0.5))} className="rounded-full border border-stone-300 p-1">
+            <button onClick={() => changePortion(-0.5)} className="rounded-full border border-stone-300 p-1">
               <Minus size={13} />
             </button>
             <span className="w-10 text-center text-sm text-stone-800 font-mono">{portion}×</span>
-            <button onClick={() => setPortion(Math.min(3, portion + 0.5))} className="rounded-full border border-stone-300 p-1">
+            <button onClick={() => changePortion(0.5)} className="rounded-full border border-stone-300 p-1">
               <Plus size={13} />
             </button>
           </div>

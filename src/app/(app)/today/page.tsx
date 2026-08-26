@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarDays, ChevronRight, Globe, IndianRupee, Sparkles } from "lucide-react";
+import { CalendarDays, ChevronRight, Globe, IndianRupee, Minus, Plus, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { STRINGS } from "@/lib/constants";
 import { todayISO } from "@/lib/date";
@@ -81,6 +81,14 @@ export default function TodayScreen() {
 
   const startCooking = (planId: string) => router.push(`/cook?plan=${planId}`);
 
+  const changePortion = async (planId: string, delta: number) => {
+    const item = plan.find((p) => p.id === planId);
+    if (!item) return;
+    const next = Math.max(0.5, Math.round((item.portion + delta) * 2) / 2);
+    setPlan(plan.map((p) => (p.id === planId ? { ...p, portion: next } : p)));
+    await supabase.from("meal_plans").update({ portion: next }).eq("id", planId);
+  };
+
   const suggest = () => {
     if (!leftover.trim()) {
       setSuggestion(null);
@@ -156,7 +164,7 @@ export default function TodayScreen() {
                   </span>
                 </div>
                 <h3 className="mt-1 text-lg text-stone-900 font-serif font-semibold">{item.recipes.name}</h3>
-                <p className="mt-0.5 text-xs text-stone-400 font-mono">{item.recipes.nutrition.calories} kcal per serving</p>
+                <p className="mt-0.5 text-xs text-stone-400 font-mono">{Math.round(item.recipes.nutrition.calories * item.portion)} kcal · {item.portion}× portion</p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {item.recipes.tags.map((t) => (
                     <Tag key={t} tone="curry">
@@ -164,9 +172,20 @@ export default function TodayScreen() {
                     </Tag>
                   ))}
                 </div>
-                <button onClick={() => startCooking(item.id)} className="mt-3 flex items-center gap-1 text-sm font-medium text-red-900">
-                  Start cooking <ChevronRight size={15} />
-                </button>
+                <div className="mt-3 flex items-center justify-between">
+                  <button onClick={() => startCooking(item.id)} className="flex items-center gap-1 text-sm font-medium text-red-900">
+                    Start cooking <ChevronRight size={15} />
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => changePortion(item.id, -0.5)} className="rounded-full border border-stone-300 p-1">
+                      <Minus size={12} />
+                    </button>
+                    <span className="w-8 text-center text-xs text-stone-600 font-mono">{item.portion}×</span>
+                    <button onClick={() => changePortion(item.id, 0.5)} className="rounded-full border border-stone-300 p-1">
+                      <Plus size={12} />
+                    </button>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
