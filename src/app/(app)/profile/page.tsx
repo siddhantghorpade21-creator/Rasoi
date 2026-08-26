@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LogOut, Plus, Trash2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { GOAL_PRESETS } from "@/lib/constants";
+import { DIET_OPTIONS, GOAL_PRESETS, REGION_OPTIONS } from "@/lib/constants";
 import { SectionLabel, LoadingScreen } from "@/components/ui";
-import type { Database } from "@/lib/database.types";
+import type { Database, DietPreference } from "@/lib/database.types";
 
 type Targets = Database["public"]["Tables"]["nutrition_targets"]["Row"];
 type Member = Database["public"]["Tables"]["household_members"]["Row"];
@@ -20,6 +20,9 @@ export default function ProfileScreen() {
   const [members, setMembers] = useState<Member[]>([]);
   const [newName, setNewName] = useState("");
   const [newNote, setNewNote] = useState("");
+  const [diet, setDiet] = useState<DietPreference | null>(null);
+  const [regions, setRegions] = useState<string[]>([]);
+  const [regionOther, setRegionOther] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -29,15 +32,34 @@ export default function ProfileScreen() {
       if (!user) return;
       setUserId(user.id);
 
-      const [{ data: targetRow }, { data: memberRows }] = await Promise.all([
+      const [{ data: targetRow }, { data: memberRows }, { data: profile }] = await Promise.all([
         supabase.from("nutrition_targets").select("*").eq("user_id", user.id).single(),
         supabase.from("household_members").select("*").eq("user_id", user.id).order("created_at"),
+        supabase.from("profiles").select("diet_preference, region_preferences, region_preference_other").eq("id", user.id).single(),
       ]);
       setTargets(targetRow);
       setMembers(memberRows ?? []);
+      setDiet((profile?.diet_preference as DietPreference | null) ?? null);
+      setRegions(profile?.region_preferences ?? []);
+      setRegionOther(profile?.region_preference_other ?? "");
       setLoading(false);
     })();
   }, [supabase]);
+
+  const saveDiet = async (id: DietPreference) => {
+    setDiet(id);
+    if (userId) await supabase.from("profiles").update({ diet_preference: id }).eq("id", userId);
+  };
+
+  const toggleRegion = async (r: string) => {
+    const next = regions.includes(r) ? regions.filter((x) => x !== r) : [...regions, r];
+    setRegions(next);
+    if (userId) await supabase.from("profiles").update({ region_preferences: next }).eq("id", userId);
+  };
+
+  const saveRegionOther = async () => {
+    if (userId) await supabase.from("profiles").update({ region_preference_other: regionOther.trim() || null }).eq("id", userId);
+  };
 
   const applyPreset = async (id: string) => {
     if (!userId || !targets) return;
@@ -110,6 +132,49 @@ export default function ProfileScreen() {
   return (
     <div className="flex flex-col gap-5 px-4 pb-6 pt-5">
       <h1 className="text-2xl text-stone-900 font-serif font-semibold">Profile</h1>
+
+      <div>
+        <SectionLabel>Dietary preference</SectionLabel>
+        <div className="flex flex-col gap-2">
+          {DIET_OPTIONS.map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => saveDiet(opt.id)}
+              className={`flex flex-col items-start rounded-2xl border px-4 py-2.5 text-left ${
+                diet === opt.id ? "border-red-900 bg-red-900 text-amber-50" : "border-stone-200 bg-white text-stone-800"
+              }`}
+            >
+              <span className="text-sm font-medium">{opt.label}</span>
+              <span className={`text-xs ${diet === opt.id ? "text-amber-100" : "text-stone-400"}`}>{opt.hint}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Regional preference</SectionLabel>
+        <div className="flex flex-wrap gap-2">
+          {REGION_OPTIONS.map((r) => (
+            <button
+              key={r}
+              onClick={() => toggleRegion(r)}
+              className={`rounded-full px-3 py-1.5 text-sm border ${
+                regions.includes(r) ? "bg-stone-900 text-amber-50 border-stone-900" : "bg-white text-stone-600 border-stone-200"
+              }`}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+        <input
+          value={regionOther}
+          onChange={(e) => setRegionOther(e.target.value)}
+          onBlur={saveRegionOther}
+          placeholder="Something else? Type it in"
+          className="mt-2 w-full rounded-full border border-stone-300 bg-white px-4 py-2 text-sm outline-none focus:border-amber-600 placeholder:text-stone-400"
+        />
+        <p className="mt-2 text-xs text-stone-400">Boosts matching dishes to the top of Discover — it doesn't hide the rest.</p>
+      </div>
 
       <div>
         <SectionLabel>Goal</SectionLabel>
