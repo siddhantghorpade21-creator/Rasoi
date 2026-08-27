@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ChefHat, MessageCircle, Plus, Sparkles, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { GAP_NUTRIENTS, sumNutrition } from "@/lib/constants";
+import { GAP_NUTRIENTS, staplesNutrition, sumNutrition } from "@/lib/constants";
 import { isoWeekStart, todayISO } from "@/lib/date";
 import { aggregateIngredients, type AggregatedIngredient } from "@/lib/ingredientPricing";
 import { NutrientBar, SectionLabel, LoadingScreen } from "@/components/ui";
@@ -36,16 +36,22 @@ export default function GroceryScreen() {
         supabase.from("grocery_items").select("*").eq("vendor_category", "addon").order("name"),
         supabase.from("grocery_list_state").select("*").eq("user_id", user.id).eq("week_start", weekStart).maybeSingle(),
         supabase.from("nutrition_targets").select("*").eq("user_id", user.id).single(),
-        supabase.from("meal_plans").select("portion, recipes(name, ingredients, nutrition)").eq("user_id", user.id).eq("plan_date", todayISO()),
+        supabase
+          .from("meal_plans")
+          .select("portion, roti_count, rice_cups, recipes(name, ingredients, nutrition)")
+          .eq("user_id", user.id)
+          .eq("plan_date", todayISO()),
       ]);
 
-      const recipes = ((planRows ?? []) as any[]).map((p) => ({ ...p.recipes, portion: p.portion })).filter((r) => r.name);
+      const rows = (planRows ?? []) as any[];
+      const recipes = rows.map((p) => ({ ...p.recipes, portion: p.portion })).filter((r) => r.name);
+      const staples = rows.map((p) => ({ nutrition: staplesNutrition(p.roti_count ?? 0, p.rice_cups ?? 0) }));
 
       setAddonCatalog(catalog ?? []);
       setToBuy((state?.to_buy_items as Record<string, boolean>) ?? {});
       setAddedExtras(state?.added_extras ?? []);
       setTargets(targetRow ?? null);
-      setTodayNutrition(sumNutrition(recipes.map((r) => ({ nutrition: r.nutrition, portion: r.portion }))));
+      setTodayNutrition(sumNutrition([...recipes.map((r) => ({ nutrition: r.nutrition, portion: r.portion })), ...staples]));
       setDishIngredients(aggregateIngredients(recipes));
       setLoading(false);
     })();

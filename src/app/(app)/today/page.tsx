@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarDays, ChevronRight, Globe, IndianRupee, Minus, Plus, Sparkles } from "lucide-react";
+import { CalendarDays, ChevronRight, Globe, Minus, Plus, Sparkles } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
-import { STRINGS } from "@/lib/constants";
+import { STRINGS, staplesNutrition } from "@/lib/constants";
 import { todayISO } from "@/lib/date";
 import { Tag, LoadingScreen } from "@/components/ui";
 import type { Database } from "@/lib/database.types";
@@ -89,6 +89,18 @@ export default function TodayScreen() {
     await supabase.from("meal_plans").update({ portion: next }).eq("id", planId);
   };
 
+  const changeStaple = async (planId: string, field: "roti_count" | "rice_cups", delta: number) => {
+    const item = plan.find((p) => p.id === planId);
+    if (!item) return;
+    const step = field === "roti_count" ? 1 : 0.5;
+    const next = Math.max(0, Math.round((item[field] + delta) / step) * step);
+    setPlan(plan.map((p) => (p.id === planId ? { ...p, [field]: next } : p)));
+    await supabase
+      .from("meal_plans")
+      .update({ [field]: next } as Record<"roti_count" | "rice_cups", number>)
+      .eq("id", planId);
+  };
+
   const suggest = () => {
     if (!leftover.trim()) {
       setSuggestion(null);
@@ -153,16 +165,10 @@ export default function TodayScreen() {
           <div className="flex flex-col gap-3">
             {plan.map((item) => (
               <div key={item.id} className="rounded-2xl border border-stone-200 bg-white p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
-                    {item.meal_slot[0].toUpperCase() + item.meal_slot.slice(1)}
-                    {item.planned_time ? ` · ${item.planned_time}` : ""}
-                  </p>
-                  <span className="flex items-center gap-1 text-xs text-stone-500 font-mono">
-                    <IndianRupee size={11} />
-                    {item.recipes.cost_estimate}
-                  </span>
-                </div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                  {item.meal_slot[0].toUpperCase() + item.meal_slot.slice(1)}
+                  {item.planned_time ? ` · ${item.planned_time}` : ""}
+                </p>
                 <h3 className="mt-1 text-lg text-stone-900 font-serif font-semibold">{item.recipes.name}</h3>
                 <p className="mt-0.5 text-xs text-stone-400 font-mono">{Math.round(item.recipes.nutrition.calories * item.portion)} kcal · {item.portion}× portion</p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -186,6 +192,36 @@ export default function TodayScreen() {
                     </button>
                   </div>
                 </div>
+                {(item.meal_slot === "lunch" || item.meal_slot === "dinner") && (
+                  <div className="mt-3 flex items-center justify-between border-t border-stone-100 pt-3">
+                    <p className="text-xs text-stone-500">Roti ya chawal?</p>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => changeStaple(item.id, "roti_count", -1)} className="rounded-full border border-stone-300 p-1">
+                          <Minus size={11} />
+                        </button>
+                        <span className="w-14 text-center text-[11px] text-stone-600 font-mono">{item.roti_count} roti</span>
+                        <button onClick={() => changeStaple(item.id, "roti_count", 1)} className="rounded-full border border-stone-300 p-1">
+                          <Plus size={11} />
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button onClick={() => changeStaple(item.id, "rice_cups", -0.5)} className="rounded-full border border-stone-300 p-1">
+                          <Minus size={11} />
+                        </button>
+                        <span className="w-16 text-center text-[11px] text-stone-600 font-mono">{item.rice_cups} cup rice</span>
+                        <button onClick={() => changeStaple(item.id, "rice_cups", 0.5)} className="rounded-full border border-stone-300 p-1">
+                          <Plus size={11} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {(item.roti_count > 0 || item.rice_cups > 0) && (
+                  <p className="mt-1 text-right text-[10px] text-stone-400">
+                    +{Math.round(staplesNutrition(item.roti_count, item.rice_cups).calories)} kcal from roti/rice
+                  </p>
+                )}
               </div>
             ))}
           </div>
