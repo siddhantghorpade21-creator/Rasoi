@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChefHat, Copy, MessageCircle, Plus, Sparkles, X } from "lucide-react";
+import { Check, ChefHat, MessageCircle, Plus, Sparkles, X } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { GAP_NUTRIENTS, sumNutrition } from "@/lib/constants";
 import { isoWeekStart, todayISO } from "@/lib/date";
@@ -22,7 +22,6 @@ export default function GroceryScreen() {
   const [targets, setTargets] = useState<Targets | null>(null);
   const [todayNutrition, setTodayNutrition] = useState(sumNutrition([]));
   const [dishIngredients, setDishIngredients] = useState<AggregatedIngredient[]>([]);
-  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const weekStart = isoWeekStart();
 
   useEffect(() => {
@@ -124,15 +123,6 @@ export default function GroceryScreen() {
     return [dishLines.length ? `For today's Rasoi:\n${dishLines.join("\n")}` : "", extraLines.length ? `Nutrition top-ups:\n${extraLines.join("\n")}` : ""]
       .filter(Boolean)
       .join("\n\n");
-  };
-
-  const copyForChef = async () => {
-    const text = buildListText();
-    if (navigator.clipboard && text) {
-      await navigator.clipboard.writeText(text);
-      setCopyState("copied");
-      setTimeout(() => setCopyState("idle"), 2000);
-    }
   };
 
   const whatsappHref = useMemo(() => {
@@ -266,27 +256,14 @@ export default function GroceryScreen() {
         </div>
       )}
 
-      <div className="flex gap-3">
-        <button onClick={copyForChef} className="flex flex-1 items-center justify-center gap-2 rounded-full bg-stone-900 py-2.5 text-sm text-amber-50">
-          {copyState === "copied" ? (
-            <>
-              <Check size={15} /> Copied
-            </>
-          ) : (
-            <>
-              <Copy size={15} /> Copy list for chef
-            </>
-          )}
-        </button>
-        <a
-          href={whatsappHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex flex-1 items-center justify-center gap-2 rounded-full border border-stone-300 py-2.5 text-sm text-stone-700"
-        >
-          <MessageCircle size={16} /> Send to cook
-        </a>
-      </div>
+      <a
+        href={whatsappHref}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center justify-center gap-2 rounded-full bg-stone-900 py-2.5 text-sm text-amber-50"
+      >
+        <MessageCircle size={16} /> Send to cook
+      </a>
       <p className="text-center text-[11px] text-stone-400 -mt-2">
         {toBuyCount} item{toBuyCount !== 1 ? "s" : ""} checked to buy
       </p>
