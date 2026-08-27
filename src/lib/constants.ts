@@ -66,3 +66,17 @@ export function dietAllowed(recipeDiet: string | null, pref: DietPreference | nu
   if (pref === "egg") return recipeDiet !== "Non-veg";
   return recipeDiet === "Veg";
 }
+
+// Per-unit estimates for the "roti ya chawal?" counter on Today — these feed
+// the nutrition calculator only, never the grocery/ingredient list (atta and
+// rice are staples people already keep stocked, not a per-dish shopping need).
+export const ROTI_NUTRITION: Nutrition = { calories: 100, protein: 3, carbs: 18, fat: 2.5, fiber: 2, iron: 1, calcium: 10 };
+export const RICE_CUP_NUTRITION: Nutrition = { calories: 200, protein: 4, carbs: 45, fat: 0.4, fiber: 0.6, iron: 0.8, calcium: 10 };
+
+export function staplesNutrition(rotiCount: number, riceCups: number): Nutrition {
+  const keys = Object.keys(ROTI_NUTRITION) as (keyof Nutrition)[];
+  return keys.reduce((acc, k) => {
+    acc[k] = ROTI_NUTRITION[k] * rotiCount + RICE_CUP_NUTRITION[k] * riceCups;
+    return acc;
+  }, {} as Nutrition);
+}

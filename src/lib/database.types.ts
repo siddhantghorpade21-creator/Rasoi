@@ -84,6 +84,8 @@ type MealPlanRow = {
   recipe_id: string;
   planned_time: string | null;
   portion: number;
+  roti_count: number;
+  rice_cups: number;
   created_at: string;
 };
 
