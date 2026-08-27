@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChefHat, KeyRound, Loader2, Mail, Send } from "lucide-react";
+import { ChefHat, KeyRound, Loader2, Mail, Send, UserRound } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
 const CALLBACK_ERROR_MESSAGES: Record<string, string> = {
@@ -23,6 +23,8 @@ function LoginForm() {
   const [code, setCode] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [verifyError, setVerifyError] = useState("");
+  const [guestLoading, setGuestLoading] = useState(false);
+  const [guestError, setGuestError] = useState("");
 
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || (typeof window !== "undefined" ? window.location.origin : "");
 
@@ -57,6 +59,20 @@ function LoginForm() {
     if (error) {
       setVerifyError(error.message);
       setVerifying(false);
+      return;
+    }
+    router.push("/discover");
+    router.refresh();
+  };
+
+  const continueAsGuest = async () => {
+    setGuestLoading(true);
+    setGuestError("");
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInAnonymously();
+    if (error) {
+      setGuestError(error.message);
+      setGuestLoading(false);
       return;
     }
     router.push("/discover");
@@ -159,7 +175,19 @@ function LoginForm() {
             Continue with Google
           </button>
 
-          <p className="text-[11px] text-stone-400">No passwords — a link or a code sent to your email, or your Google account.</p>
+          <button
+            onClick={continueAsGuest}
+            disabled={guestLoading}
+            className="flex w-full items-center justify-center gap-2 text-sm font-medium text-stone-500 disabled:opacity-60"
+          >
+            {guestLoading ? <Loader2 size={14} className="animate-spin" /> : <UserRound size={14} />}
+            Continue as guest
+          </button>
+          {guestError && <p className="text-xs text-red-800">{guestError}</p>}
+
+          <p className="text-[11px] text-stone-400">
+            No passwords — a link or a code sent to your email, your Google account, or jump in as a guest (guest data stays on this device only).
+          </p>
         </div>
       </div>
     </div>
