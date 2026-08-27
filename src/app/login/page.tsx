@@ -1,13 +1,28 @@
 "use client";
 
-import { useState } from "react";
-import { ChefHat, Loader2, Mail, Send } from "lucide-react";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ChefHat, KeyRound, Loader2, Mail, Send } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
-export default function LoginPage() {
+const CALLBACK_ERROR_MESSAGES: Record<string, string> = {
+  link_used_or_expired:
+    "That link didn't work — it may have already been opened once (some email apps do this automatically), or it's expired. Enter the 6-digit code from the same email instead, or request a new one below.",
+  wrong_browser:
+    "That link only works in the browser you requested it from. If you opened it from a different app or device, enter the 6-digit code from the email instead.",
+};
+
+function LoginForm() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const callbackError = searchParams.get("error");
+
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
+  const [code, setCode] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState("");
 
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || (typeof window !== "undefined" ? window.location.origin : "");
 
@@ -26,6 +41,26 @@ export default function LoginPage() {
     } else {
       setStatus("sent");
     }
+  };
+
+  const verifyCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!code.trim()) return;
+    setVerifying(true);
+    setVerifyError("");
+    const supabase = createClient();
+    const { error } = await supabase.auth.verifyOtp({
+      email: email.trim(),
+      token: code.trim(),
+      type: "email",
+    });
+    if (error) {
+      setVerifyError(error.message);
+      setVerifying(false);
+      return;
+    }
+    router.push("/discover");
+    router.refresh();
   };
 
   const signInWithGoogle = async () => {
@@ -48,9 +83,43 @@ export default function LoginPage() {
             <p className="mt-1 text-sm italic text-stone-500">Aaj kya banega?</p>
           </div>
 
+          {callbackError && (
+            <div className="w-full rounded-2xl border border-dashed border-red-800 bg-red-50 p-3 text-left text-xs text-red-800">
+              {CALLBACK_ERROR_MESSAGES[callbackError] ?? "That sign-in link didn't work — please try again below."}
+            </div>
+          )}
+
           {status === "sent" ? (
-            <div className="w-full rounded-2xl border border-dashed border-emerald-700 bg-emerald-50 p-4 text-sm text-emerald-800">
-              Check <span className="font-medium">{email}</span> for a sign-in link.
+            <div className="flex w-full flex-col gap-3">
+              <div className="rounded-2xl border border-dashed border-emerald-700 bg-emerald-50 p-4 text-sm text-emerald-800">
+                Check <span className="font-medium">{email}</span> — click the link, or enter the 6-digit code from that email below.
+              </div>
+              <form onSubmit={verifyCode} className="flex w-full flex-col gap-3">
+                <div className="flex items-center gap-2 rounded-full border border-stone-300 bg-white px-4 py-2.5">
+                  <KeyRound size={16} className="text-stone-400" />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    required
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    placeholder="6-digit code"
+                    className="flex-1 text-sm outline-none placeholder:text-stone-400"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={verifying}
+                  className="flex items-center justify-center gap-2 rounded-full bg-stone-900 py-2.5 text-sm font-medium text-amber-50 disabled:opacity-60"
+                >
+                  {verifying ? <Loader2 size={16} className="animate-spin" /> : null}
+                  Verify code
+                </button>
+                {verifyError && <p className="text-xs text-red-800">{verifyError}</p>}
+              </form>
+              <button onClick={() => setStatus("idle")} className="text-xs text-stone-500 underline">
+                Use a different email
+              </button>
             </div>
           ) : (
             <form onSubmit={sendMagicLink} className="flex w-full flex-col gap-3">
@@ -90,9 +159,17 @@ export default function LoginPage() {
             Continue with Google
           </button>
 
-          <p className="text-[11px] text-stone-400">No passwords — just a link sent to your email, or your Google account.</p>
+          <p className="text-[11px] text-stone-400">No passwords — a link or a code sent to your email, or your Google account.</p>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
   );
 }
